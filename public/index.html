@@ -307,11 +307,16 @@
     const BULLET_SPEED = 10;
     const MAX_HEALTH = 100;
     
+    // Target FPS (set to desired value; higher than monitor refresh won't display more frames)
+    const TARGET_FPS = 120; // try 120; set to 60, 144, etc. depending on hardware
+    const FRAME_INTERVAL = 1000 / TARGET_FPS;
+
     // Responsive canvas
     function resizeCanvas() {
       const rect = canvas.getBoundingClientRect();
-      canvas.width = rect.width;
-      canvas.height = rect.height;
+      // keep canvas drawing buffer resolution reasonable
+      canvas.width = rect.width || canvas.width;
+      canvas.height = rect.height || canvas.height;
       minimapCanvas.width = 130;
       minimapCanvas.height = 130;
     }
@@ -323,7 +328,7 @@
     let myPlayerId = null;
     let angle = 0;
     const keys = {};
-    let lastTime = 0;
+    let lastTime = performance.now();
     let fps = 0;
     let frameCount = 0;
     let canShoot = true;
@@ -618,16 +623,17 @@
       // Draw arena boundaries
       drawArenaBoundaries();
 
-      // Draw ground pattern
+      // Draw ground pattern (reduced density to improve performance)
       ctx.strokeStyle = "rgba(255,255,255,0.03)";
       ctx.lineWidth = 1;
-      for (let x = 0; x < canvas.width; x += 50) {
+      // step increased from 50 -> 80 to reduce draw work when targeting higher FPS
+      for (let x = 0; x < canvas.width; x += 80) {
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, canvas.height);
         ctx.stroke();
       }
-      for (let y = 0; y < canvas.height; y += 50) {
+      for (let y = 0; y < canvas.height; y += 80) {
         ctx.beginPath();
         ctx.moveTo(0, y);
         ctx.lineTo(canvas.width, y);
@@ -671,12 +677,13 @@
         }
       });
 
-      // FPS counter
+      // FPS counter: updated each render
       frameCount++;
-      if (performance.now() - lastTime > 1000) {
-        fps = Math.round(frameCount * 1000 / (performance.now() - lastTime));
+      const now = performance.now();
+      if (now - lastTime >= 1000) {
+        fps = Math.round(frameCount * 1000 / (now - lastTime));
         frameCount = 0;
-        lastTime = performance.now();
+        lastTime = now;
         document.getElementById("fps").textContent = fps;
       }
     }
@@ -718,14 +725,42 @@
       });
     }
 
-    function gameLoop() {
-      update();
+    // Custom game loop that tries to meet TARGET_FPS
+    let accumulator = 0;
+    let previous = performance.now();
+
+    function loop(now) {
+      // now is provided by rAF; but we allow logic/draw to run at a target rate.
+      const delta = now - previous;
+      previous = now;
+      accumulator += delta;
+
+      // If TARGET_FPS is higher than actual rAF (monitor refresh), this cannot force the display to show more frames,
+      // but it will allow logic to attempt to run more frequently if rAF provides time slices.
+      // Run as many fixed-interval steps as needed but cap to prevent spiral of death.
+      const maxSteps = 3;
+      let steps = 0;
+      while (accumulator >= FRAME_INTERVAL && steps < maxSteps) {
+        update();
+        accumulator -= FRAME_INTERVAL;
+        steps++;
+      }
+
+      // Always draw once per rAF for smooth rendering, but you can also decide to draw only if a logic step ran.
       draw();
       drawMinimap();
-      requestAnimationFrame(gameLoop);
+
+      requestAnimationFrame(loop);
     }
 
-    gameLoop();
+    // Start loop
+    requestAnimationFrame((ts) => {
+      // initialize timing anchors
+      previous = ts;
+      lastTime = performance.now();
+      frameCount = 0;
+      requestAnimationFrame(loop);
+    });
   </script>
 </body>
 </html>
