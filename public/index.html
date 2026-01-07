@@ -5,86 +5,398 @@
   <style>
     body {
       margin: 0;
-      background: #111;
-      color: white;
+      background: #0b0b0d;
+      color: #e6e6e6;
       text-align: center;
-      font-family: Arial;
+      font-family: Inter, Arial, sans-serif;
+    }
+    .ui {
+      padding: 12px;
     }
     canvas {
-      background: #222;
+      background: linear-gradient(#161616, #0f0f10);
       display: block;
-      margin: auto;
-      border: 2px solid #555;
+      margin: 0 auto;
+      border-radius: 8px;
+      box-shadow: 0 6px 30px rgba(0,0,0,0.6);
+      border: 2px solid rgba(255,255,255,0.04);
+    }
+    p.small {
+      margin: 4px 0 12px;
+      color: #bfbfbf;
+      font-size: 13px;
     }
   </style>
 </head>
 <body>
 
 <h2>2D Multiplayer Tank Game</h2>
-<p>Move: W A S D | Shoot: Click</p>
-<canvas id="game" width="800" height="500"></canvas>
+<div class="ui">
+  <p class="small">Move: W A S D | Aim: Mouse | Shoot: Click</p>
+</div>
+<canvas id="game" width="800" height="500" style="width:800px;height:500px"></canvas>
 
 <script src="/socket.io/socket.io.js"></script>
 <script>
+  // -- Utilities
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const lerpAngle = (a, b, t) => {
+    let diff = (b - a + Math.PI) % (2*Math.PI) - Math.PI;
+    return a + diff * t;
+  };
+
+  // -- Networking / state
   const socket = io();
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
 
-  let players = {};
-  let bullets = [];
-  let angle = 0;
-  const keys = {};
+  // Hi-DPI support
+  const DPR = Math.max(1, window.devicePixelRatio || 1);
+  const CSS_W = 800, CSS_H = 500;
+  canvas.width = CSS_W * DPR;
+  canvas.height = CSS_H * DPR;
+  canvas.style.width = CSS_W + "px";
+  canvas.style.height = CSS_H + "px";
+  ctx.scale(DPR, DPR);
 
-  document.addEventListener("keydown", e => keys[e.key] = true);
-  document.addEventListener("keyup", e => keys[e.key] = false);
-  canvas.addEventListener("click", () => socket.emit("shoot"));
+  let players = {};   // keyed by id; we store interpolation metadata
+  let bullets = [];   // server-authoritative bullet list (we'll smoothly draw)
+  const localId = { id: null }; // will be set when server tells us (optional)
+  let keys = {};
+  let mouse = { x: CSS_W/2, y: CSS_H/2, angle: 0, down: false };
 
-  socket.on("state", (data) => {
-    players = data.players;
-    bullets = data.bullets;
+  let lastSend = 0;
+  const SEND_RATE = 40; // ms between move emits (client-side throttling)
+
+  // local predicted state for smoother control of the local player
+  const local = {
+    x: CSS_W/2,
+    y: CSS_H/2,
+    angle: 0,
+    speed: 140, // pixels/sec
+    velX: 0,
+    velY: 0,
+    lastUpdate: performance.now()
+  };
+
+  // input handlers
+  document.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
+  document.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
+  canvas.addEventListener("mousemove", (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    // map client coords to canvas CSS coordinates
+    mouse.x = (ev.clientX - rect.left) * (CSS_W / rect.width);
+    mouse.y = (ev.clientY - rect.top) * (CSS_H / rect.height);
+    mouse.angle = Math.atan2(mouse.y - (local.y || CSS_H/2), mouse.x - (local.x || CSS_W/2));
+  });
+  canvas.addEventListener("mousedown", (ev) => {
+    mouse.down = true;
+    socket.emit("shoot", { x: mouse.x, y: mouse.y, angle: mouse.angle });
+  });
+  canvas.addEventListener("mouseup", () => mouse.down = false);
+
+  // socket: server sends authoritative state periodically
+  socket.on("connect", () => {
+    console.log("connected", socket.id);
+    localId.id = socket.id;
   });
 
-  function update() {
-    let dx = 0, dy = 0;
-    if (keys["w"]) dy = -3;
-    if (keys["s"]) dy = 3;
-    if (keys["a"]) dx = -3;
-    if (keys["d"]) dx = 3;
+  socket.on("state", (data) => {
+    // data.players: {id: {x,y,angle,hp,name,...}}  data.bullets: [{x,y,vx,vy,id,...}]
+    const now = performance.now();
+    // update local prediction base if server gave our position
+    if (data.players && data.players[socket.id]) {
+      const sp = data.players[socket.id];
+      // correct local predicted state smoothly (reconciliation)
+      local.x = sp.x;
+      local.y = sp.y;
+      local.angle = sp.angle;
+    }
 
-    if (dx || dy) {
-      angle = Math.atan2(dy, dx);
-      socket.emit("move", { dx, dy, angle });
+    // For every player, store interpolation targets
+    Object.keys(data.players || {}).forEach(id => {
+      const serverP = data.players[id];
+      if (!players[id]) {
+        // create interpolation object if new
+        players[id] = {
+          displayX: serverP.x,
+          displayY: serverP.y,
+          displayAngle: serverP.angle || 0,
+          targetX: serverP.x,
+          targetY: serverP.y,
+          targetAngle: serverP.angle || 0,
+          lastUpdate: now
+        };
+      }
+      const p = players[id];
+      p.prevX = p.displayX;
+      p.prevY = p.displayY;
+      p.prevAngle = p.displayAngle;
+      p.targetX = serverP.x;
+      p.targetY = serverP.y;
+      p.targetAngle = serverP.angle || 0;
+      p.lastUpdate = now;
+      p.hp = serverP.hp ?? 100;
+      p.name = serverP.name ?? (id === socket.id ? "You" : ("Player-" + id.slice(0,4)));
+    });
+
+    // Remove players not present anymore
+    Object.keys(players).forEach(id => {
+      if (!data.players || !data.players[id]) {
+        delete players[id];
+      }
+    });
+
+    // bullets - we'll draw them smoothly. store server list
+    bullets = (data.bullets || []).map(b => Object.assign({}, b, { drawX: b.x, drawY: b.y }));
+  });
+
+  // -- Game update/draw loop with delta time and interpolation
+  let lastFrame = performance.now();
+
+  function processInput(dt) {
+    // simple acceleration + friction for nicer movement
+    const acc = 600; // px/s^2
+    const maxSpeed = 180; // px/s
+    const friction = 6; // per second
+
+    const up = keys["w"] || keys["arrowup"];
+    const down = keys["s"] || keys["arrowdown"];
+    const left = keys["a"] || keys["arrowleft"];
+    const right = keys["d"] || keys["arrowright"];
+
+    let ax = 0, ay = 0;
+    if (up) ay -= 1;
+    if (down) ay += 1;
+    if (left) ax -= 1;
+    if (right) ax += 1;
+
+    if (ax !== 0 || ay !== 0) {
+      const len = Math.hypot(ax, ay) || 1;
+      ax /= len; ay /= len;
+      local.velX += ax * acc * dt;
+      local.velY += ay * acc * dt;
+    } else {
+      // apply friction
+      local.velX -= local.velX * clamp(friction * dt, 0, 1);
+      local.velY -= local.velY * clamp(friction * dt, 0, 1);
+    }
+
+    // clamp speed
+    const spd = Math.hypot(local.velX, local.velY);
+    if (spd > maxSpeed) {
+      const s = maxSpeed / spd;
+      local.velX *= s;
+      local.velY *= s;
+    }
+
+    // integrate
+    local.x += local.velX * dt;
+    local.y += local.velY * dt;
+
+    // keep in bounds
+    local.x = clamp(local.x, 10, CSS_W - 10);
+    local.y = clamp(local.y, 10, CSS_H - 10);
+
+    // aim towards mouse (local)
+    local.angle = Math.atan2(mouse.y - local.y, mouse.x - local.x);
+
+    // Send movement updates at limited rate (throttle)
+    const now = performance.now();
+    if (now - lastSend > SEND_RATE) {
+      lastSend = now;
+      // keep same "move" event shape as before but include dt and position for reconciliation
+      socket.emit("move", { dx: local.velX, dy: local.velY, angle: local.angle, x: local.x, y: local.y, dt });
     }
   }
 
-  function draw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    Object.values(players).forEach(p => {
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate(p.angle);
-      ctx.fillStyle = "lime";
-      ctx.fillRect(-15, -10, 30, 20);
-      ctx.restore();
-
-      ctx.fillStyle = "red";
-      ctx.fillRect(p.x - 15, p.y - 22, p.hp / 4, 4);
-    });
-
-    bullets.forEach(b => {
-      ctx.fillStyle = "yellow";
-      ctx.fillRect(b.x, b.y, 5, 5);
+  function interpolatePlayers() {
+    // interpolate display positions between prev and target, using time since lastUpdate
+    const now = performance.now();
+    Object.entries(players).forEach(([id, p]) => {
+      const elapsed = (now - p.lastUpdate) / 100; // normalized smoothing window (adjustable)
+      const t = clamp(elapsed, 0, 1);
+      p.displayX = lerp(p.prevX ?? p.targetX, p.targetX, t);
+      p.displayY = lerp(p.prevY ?? p.targetY, p.targetY, t);
+      p.displayAngle = lerpAngle(p.prevAngle ?? p.targetAngle, p.targetAngle, t);
     });
   }
 
-  function loop() {
-    update();
+  function updateBullets(dt) {
+    // smooth bullet positions (simple approach: move by velocity; server will correct)
+    bullets.forEach(b => {
+      if (typeof b.vx !== "undefined" && typeof b.vy !== "undefined") {
+        b.drawX += b.vx * dt;
+        b.drawY += b.vy * dt;
+      } else {
+        // fallback: lerp towards server position
+        b.drawX = lerp(b.drawX, b.x, 0.2);
+        b.drawY = lerp(b.drawY, b.y, 0.2);
+      }
+    });
+  }
+
+  function drawTank(x, y, angle, hp = 100, name = "Player", isLocal = false) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+
+    // shadow
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.beginPath();
+    ctx.ellipse(0, 10, 22, 8, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // body
+    ctx.fillStyle = isLocal ? "#7efc6f" : "#63a7ff";
+    ctx.strokeStyle = "rgba(0,0,0,0.35)";
+    ctx.lineWidth = 2;
+    roundRect(ctx, -18, -12, 36, 24, 4, true, false);
+
+    // turret
+    ctx.fillStyle = "#111";
+    ctx.beginPath();
+    ctx.arc(0, 0, 9, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = "#333";
+    ctx.beginPath();
+    ctx.arc(0, 0, 6, 0, Math.PI*2);
+    ctx.fill();
+
+    // barrel
+    ctx.fillStyle = "#222";
+    ctx.fillRect(6, -3, 18, 6);
+    ctx.restore();
+
+    // health bar above
+    const hbW = 40, hbH = 6;
+    const barX = x - hbW/2, barY = y - 28;
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    roundRect(ctx, barX-1, barY-1, hbW+2, hbH+2, 3, true, false);
+    // background
+    ctx.fillStyle = "#4b4b4b";
+    roundRect(ctx, barX, barY, hbW, hbH, 3, true, false);
+    // health
+    const pct = clamp(hp/100, 0, 1);
+    const grad = ctx.createLinearGradient(barX,0,barX+hbW,0);
+    grad.addColorStop(0, "#ff5f5f");
+    grad.addColorStop(1, "#ffdf5f");
+    ctx.fillStyle = grad;
+    roundRect(ctx, barX, barY, hbW * pct, hbH, 3, true, false);
+
+    // name
+    ctx.fillStyle = "#e9e9e9";
+    ctx.font = "12px Inter, Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(name, x, y - 36);
+    ctx.restore();
+  }
+
+  function roundRect(ctx, x, y, w, h, r, fill, stroke) {
+    if (typeof r === 'undefined') r = 5;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    if (fill) ctx.fill();
+    if (stroke) ctx.stroke();
+  }
+
+  function draw() {
+    // clear
+    ctx.clearRect(0, 0, CSS_W, CSS_H);
+
+    // background grid for depth
+    ctx.save();
+    ctx.globalAlpha = 0.06;
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1;
+    for (let gx = 0; gx < CSS_W; gx += 40) {
+      ctx.beginPath();
+      ctx.moveTo(gx + 0.5, 0);
+      ctx.lineTo(gx + 0.5, CSS_H);
+      ctx.stroke();
+    }
+    for (let gy = 0; gy < CSS_H; gy += 40) {
+      ctx.beginPath();
+      ctx.moveTo(0, gy + 0.5);
+      ctx.lineTo(CSS_W, gy + 0.5);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // players (draw others first)
+    Object.entries(players).forEach(([id, p]) => {
+      const isLocal = (id === socket.id);
+      const x = isLocal ? local.x : p.displayX;
+      const y = isLocal ? local.y : p.displayY;
+      const angle = isLocal ? local.angle : p.displayAngle;
+      drawTank(x, y, angle, p.hp ?? 100, p.name ?? id, isLocal);
+    });
+
+    // bullets
+    bullets.forEach(b => {
+      ctx.save();
+      ctx.translate(b.drawX, b.drawY);
+      ctx.fillStyle = "rgba(255, 215, 60, 0.98)";
+      ctx.beginPath();
+      ctx.arc(0, 0, 3.5, 0, Math.PI*2);
+      ctx.fill();
+
+      // small glow
+      ctx.globalCompositeOperation = "lighter";
+      const g = ctx.createRadialGradient(0,0,0,0,0,12);
+      g.addColorStop(0, "rgba(255,235,160,0.9)");
+      g.addColorStop(1, "rgba(255,235,160,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(0,0,8,0,Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    });
+
+    // debug: crosshair at mouse
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.beginPath();
+    ctx.moveTo(mouse.x - 8, mouse.y);
+    ctx.lineTo(mouse.x + 8, mouse.y);
+    ctx.moveTo(mouse.x, mouse.y - 8);
+    ctx.lineTo(mouse.x, mouse.y + 8);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function loop(now) {
+    const tNow = now || performance.now();
+    const dt = Math.min(0.05, (tNow - lastFrame) / 1000); // clamp dt to avoid large jumps
+    lastFrame = tNow;
+
+    // update local physics & send move
+    processInput(dt);
+
+    // interpolation and bullet smoothing
+    interpolatePlayers();
+    updateBullets(dt);
+
+    // draw everything
     draw();
+
     requestAnimationFrame(loop);
   }
 
-  loop();
+  // start
+  requestAnimationFrame(loop);
+
+  // keep canvas responsive to DPR changes (optional)
+  window.addEventListener("resize", () => {
+    // (left simple — for production consider re-scaling on DPR or window size changes)
+  });
 </script>
 
 </body>
