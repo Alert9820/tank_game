@@ -194,6 +194,36 @@
     .pulse {
       animation: pulse 1.5s infinite;
     }
+
+    .hit-effect {
+      position: absolute;
+      width: 100px;
+      height: 100px;
+      pointer-events: none;
+      opacity: 0;
+      background: radial-gradient(circle, rgba(255,50,50,0.7) 0%, transparent 70%);
+      border-radius: 50%;
+      z-index: 100;
+    }
+
+    .health-bar-container {
+      position: absolute;
+      top: 10px;
+      right: 200px;
+      width: 200px;
+      height: 20px;
+      background: rgba(0,0,0,0.7);
+      border: 1px solid #333;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .health-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #ff0000, #ffff00, #00ff00);
+      border-radius: 10px;
+      transition: width 0.3s ease;
+    }
   </style>
 </head>
 <body>
@@ -214,6 +244,10 @@
           <span>FPS</span>
         </div>
       </div>
+    </div>
+
+    <div class="health-bar-container">
+      <div id="healthBar" class="health-bar" style="width: 100%"></div>
     </div>
 
     <canvas id="game" width="1200" height="700"></canvas>
@@ -243,7 +277,18 @@
     const ctx = canvas.getContext("2d");
     const minimapCanvas = document.getElementById("minimapCanvas");
     const minimapCtx = minimapCanvas.getContext("2d");
-   
+    const healthBar = document.getElementById("healthBar");
+    
+    // Game constants
+    const ARENA_WIDTH = 1200;
+    const ARENA_HEIGHT = 700;
+    const TANK_WIDTH = 30;
+    const TANK_HEIGHT = 20;
+    const TANK_RADIUS = 15;
+    const BULLET_DAMAGE = 20;
+    const BULLET_SPEED = 10;
+    const MAX_HEALTH = 100;
+    
     // Responsive canvas
     function resizeCanvas() {
       const rect = canvas.getBoundingClientRect();
@@ -263,6 +308,7 @@
     let lastTime = 0;
     let fps = 0;
     let frameCount = 0;
+    let hitEffects = [];
 
     // Crosshair positioning
     const crosshair = document.getElementById("crosshair");
@@ -276,6 +322,9 @@
     document.addEventListener("keydown", e => {
       keys[e.code.toLowerCase()] = true;
       if (e.code === "Space") e.preventDefault();
+      if (e.code === "KeyR" && myPlayerId) {
+        socket.emit("repair");
+      }
     });
     document.addEventListener("keyup", e => keys[e.code.toLowerCase()] = false);
     canvas.addEventListener("click", (e) => {
@@ -298,12 +347,38 @@
       // Update UI
       document.getElementById("playersCount").textContent = Object.keys(players).length;
       document.getElementById("bulletsCount").textContent = bullets.length;
+      
+      // Update health bar
+      if (myPlayerId && players[myPlayerId]) {
+        const hp = players[myPlayerId].hp || 100;
+        healthBar.style.width = `${hp}%`;
+      }
      
       updateLeaderboard();
     });
 
     socket.on("playerJoined", (player) => {
       players[player.id] = player;
+    });
+
+    socket.on("hit", (data) => {
+      if (data.playerId === myPlayerId) {
+        // Create hit effect
+        const effect = document.createElement('div');
+        effect.className = 'hit-effect';
+        effect.style.left = (canvas.width/2 - 50) + 'px';
+        effect.style.top = (canvas.height/2 - 50) + 'px';
+        document.querySelector('.game-container').appendChild(effect);
+        
+        // Animate effect
+        effect.style.opacity = '1';
+        effect.style.transform = 'scale(1)';
+        setTimeout(() => {
+          effect.style.opacity = '0';
+          effect.style.transform = 'scale(2)';
+          setTimeout(() => effect.remove(), 300);
+        }, 100);
+      }
     });
 
     function updateLeaderboard() {
@@ -325,19 +400,50 @@
       });
     }
 
-    function update() {
-      let dx = 0, dy = 0, boost = 1;
-     
-      if (keys["keyw"]) dy -= 3 * boost;
-      if (keys["keys"]) dy += 1.5;
-      if (keys["keya"]) dx -= 3 * boost;
-      if (keys["keyd"]) dx += 3 * boost;
-     
-      if (keys["space"]) boost = 1.8;
+    // Boundary collision detection
+    function checkBoundaries(x, y) {
+      const minX = TANK_RADIUS;
+      const maxX = ARENA_WIDTH - TANK_RADIUS;
+      const minY = TANK_RADIUS;
+      const maxY = ARENA_HEIGHT - TANK_RADIUS;
+      
+      return {
+        x: Math.max(minX, Math.min(maxX, x)),
+        y: Math.max(minY, Math.min(maxY, y))
+      };
+    }
 
+    function update() {
+      if (!myPlayerId || !players[myPlayerId]) return;
+      
+      let dx = 0, dy = 0;
+      const speed = 3;
+      const boost = keys["space"] ? 1.8 : 1;
+      
+      if (keys["keyw"]) dy -= speed * boost;
+      if (keys["keys"]) dy += speed * boost;
+      if (keys["keya"]) dx -= speed * boost;
+      if (keys["keyd"]) dx += speed * boost;
+     
       if (dx || dy) {
         angle = Math.atan2(dy, dx);
-        socket.emit("move", { dx, dy, angle, boost });
+        
+        // Get current position
+        const currentPlayer = players[myPlayerId];
+        let newX = currentPlayer.x + dx;
+        let newY = currentPlayer.y + dy;
+        
+        // Apply boundary constraints
+        const boundedPos = checkBoundaries(newX, newY);
+        newX = boundedPos.x;
+        newY = boundedPos.y;
+        
+        socket.emit("move", { 
+          x: newX, 
+          y: newY, 
+          angle: angle, 
+          boost: boost 
+        });
       }
     }
 
@@ -352,12 +458,21 @@
      
       // Tank body glow
       ctx.shadowColor = isMe ? "#00ff88" : "#ff4444";
-      ctx.shadowBlur = 20;
+      ctx.shadowBlur = hp > 50 ? 20 : 30; // More glow when low health
      
-      // Tank body
+      // Tank body with damage effect
       const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 20);
-      gradient.addColorStop(0, isMe ? "#00ff88" : "#444");
-      gradient.addColorStop(1, isMe ? "#00aa55" : "#222");
+      if (hp > 50) {
+        gradient.addColorStop(0, isMe ? "#00ff88" : "#444");
+        gradient.addColorStop(1, isMe ? "#00aa55" : "#222");
+      } else if (hp > 20) {
+        gradient.addColorStop(0, isMe ? "#ff8800" : "#664400");
+        gradient.addColorStop(1, isMe ? "#aa5500" : "#442200");
+      } else {
+        gradient.addColorStop(0, isMe ? "#ff0000" : "#660000");
+        gradient.addColorStop(1, isMe ? "#aa0000" : "#440000");
+      }
+      
       ctx.fillStyle = gradient;
       ctx.fillRect(-15, -10, 30, 20);
 
@@ -375,23 +490,60 @@
       // Health bar
       ctx.fillStyle = "rgba(0,0,0,0.7)";
       ctx.fillRect(x - 20, y - 35, 40, 6);
-      ctx.fillStyle = `rgb(${255 * (1 - hp/100)}, ${255 * (hp/100)}, 0)`;
-      ctx.fillRect(x - 20, y - 35, hp * 0.4, 6);
+      
+      // Health color based on percentage
+      let healthColor;
+      if (hp > 70) healthColor = "#00ff00";
+      else if (hp > 40) healthColor = "#ffff00";
+      else healthColor = "#ff0000";
+      
+      ctx.fillStyle = healthColor;
+      ctx.fillRect(x - 20, y - 35, (hp/100) * 40, 6);
+      
+      // Health text
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 10px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(`${hp}%`, x, y - 30);
 
       // Name and score
       ctx.fillStyle = isMe ? "#00ff88" : "#fff";
       ctx.font = "bold 14px Arial";
       ctx.textAlign = "center";
-      ctx.fillText(`${score}`, x, y + 35);
+      ctx.fillText(`${score}`, x, y + 40);
+    }
+
+    function drawArenaBoundaries() {
+      // Draw arena boundary
+      ctx.strokeStyle = "#00ff88";
+      ctx.lineWidth = 3;
+      ctx.setLineDash([10, 5]);
+      ctx.strokeRect(0, 0, ARENA_WIDTH, ARENA_HEIGHT);
+      ctx.setLineDash([]);
+      
+      // Draw warning zone near boundaries
+      const warningZone = 50;
+      ctx.strokeStyle = "rgba(255, 0, 0, 0.3)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(warningZone, warningZone, 
+                     ARENA_WIDTH - 2*warningZone, 
+                     ARENA_HEIGHT - 2*warningZone);
     }
 
     function draw() {
       // Clear with gradient background
-      const gradient = ctx.createRadialGradient(canvas.width/2, canvas.height/2, 0, canvas.width/2, canvas.height/2, Math.max(canvas.width, canvas.height));
+      const gradient = ctx.createRadialGradient(
+        canvas.width/2, canvas.height/2, 0,
+        canvas.width/2, canvas.height/2, 
+        Math.max(canvas.width, canvas.height)
+      );
       gradient.addColorStop(0, "#2a2a4a");
       gradient.addColorStop(1, "#0a0a1a");
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Draw arena boundaries
+      drawArenaBoundaries();
 
       // Draw ground pattern
       ctx.strokeStyle = "rgba(255,255,255,0.03)";
@@ -409,27 +561,40 @@
         ctx.stroke();
       }
 
-      // Draw bullets
+      // Draw bullets with trail effect
       bullets.forEach(b => {
+        // Bullet trail
+        ctx.beginPath();
+        ctx.moveTo(b.x - b.vx * 2, b.y - b.vy * 2);
+        ctx.lineTo(b.x, b.y);
+        ctx.strokeStyle = "rgba(255, 255, 100, 0.5)";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        // Bullet core
         ctx.save();
         ctx.translate(b.x, b.y);
         ctx.fillStyle = "#ffff44";
         ctx.shadowColor = "#ffff00";
         ctx.shadowBlur = 15;
-        ctx.fillRect(-2, -2, 4, 4);
+        ctx.beginPath();
+        ctx.arc(0, 0, 3, 0, Math.PI * 2);
+        ctx.fill();
         ctx.restore();
       });
 
       // Draw players
       Object.entries(players).forEach(([id, player]) => {
-        drawTank(
-          player.x * (canvas.width / 800),
-          player.y * (canvas.height / 500),
-          player.angle,
-          player.hp || 100,
-          player.score || 0,
-          id === myPlayerId
-        );
+        if (player.x && player.y) {
+          drawTank(
+            player.x,
+            player.y,
+            player.angle || 0,
+            player.hp || 100,
+            player.score || 0,
+            id === myPlayerId
+          );
+        }
       });
 
       // FPS counter
@@ -444,30 +609,49 @@
 
     function drawMinimap() {
       minimapCtx.clearRect(0, 0, 130, 130);
+      
+      // Draw minimap background
       minimapCtx.fillStyle = "rgba(20,20,40,0.8)";
       minimapCtx.fillRect(0, 0, 130, 130);
+      
+      // Draw arena boundaries on minimap
+      minimapCtx.strokeStyle = "#00ff88";
+      minimapCtx.lineWidth = 2;
+      minimapCtx.strokeRect(5, 5, 120, 120);
 
+      // Draw players on minimap
       Object.values(players).forEach(p => {
-        minimapCtx.fillStyle = p.id === myPlayerId ? "#00ff88" : "#ff4444";
-        minimapCtx.beginPath();
-        minimapCtx.arc(p.x / 6, p.y / 6, 3, 0, Math.PI * 2);
-        minimapCtx.fill();
+        if (p.x && p.y) {
+          const miniX = (p.x / ARENA_WIDTH) * 120 + 5;
+          const miniY = (p.y / ARENA_HEIGHT) * 120 + 5;
+          
+          minimapCtx.fillStyle = p.id === myPlayerId ? "#00ff88" : "#ff4444";
+          minimapCtx.beginPath();
+          minimapCtx.arc(miniX, miniY, p.id === myPlayerId ? 3 : 2, 0, Math.PI * 2);
+          minimapCtx.fill();
+        }
       });
 
+      // Draw bullets on minimap
       bullets.forEach(b => {
+        const miniX = (b.x / ARENA_WIDTH) * 120 + 5;
+        const miniY = (b.y / ARENA_HEIGHT) * 120 + 5;
+        
         minimapCtx.fillStyle = "#ffff44";
-        minimapCtx.fillRect(b.x / 6 - 0.5, b.y / 6 - 0.5, 1, 1);
+        minimapCtx.beginPath();
+        minimapCtx.arc(miniX, miniY, 1, 0, Math.PI * 2);
+        minimapCtx.fill();
       });
     }
 
-    function loop(currentTime) {
+    function gameLoop() {
       update();
       draw();
       drawMinimap();
-      requestAnimationFrame(loop);
+      requestAnimationFrame(gameLoop);
     }
 
-    requestAnimationFrame(loop);
+    gameLoop();
   </script>
 </body>
 </html>
