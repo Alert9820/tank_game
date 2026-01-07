@@ -224,6 +224,18 @@
       border-radius: 10px;
       transition: width 0.3s ease;
     }
+    
+    .cooldown-indicator {
+      position: absolute;
+      bottom: 80px;
+      right: 30px;
+      background: rgba(0, 0, 0, 0.8);
+      padding: 10px 15px;
+      border-radius: 10px;
+      border: 1px solid #00ccff;
+      font-size: 12px;
+      color: #00ccff;
+    }
   </style>
 </head>
 <body>
@@ -261,10 +273,14 @@
       <canvas id="minimapCanvas" width="130" height="130"></canvas>
     </div>
 
+    <div class="cooldown-indicator" id="cooldownIndicator" style="display: none;">
+      Repair Cooldown: <span id="repairTimer">5</span>s
+    </div>
+
     <div class="controls">
       <strong>🎮 CONTROLS</strong><br>
       <span style="color: #00ff88;">WASD</span> Move | <span style="color: #ff4444;">CLICK</span> Shoot<br>
-      <span style="color: #ffaa00;">SPACE</span> Boost | <span style="color: #00ccff;">R</span> Repair
+      <span style="color: #ffaa00;">SPACE</span> Boost | <span style="color: #00ccff;">R</span> Repair (5s CD)
     </div>
 
     <div class="crosshair pulse" id="crosshair"></div>
@@ -278,6 +294,8 @@
     const minimapCanvas = document.getElementById("minimapCanvas");
     const minimapCtx = minimapCanvas.getContext("2d");
     const healthBar = document.getElementById("healthBar");
+    const cooldownIndicator = document.getElementById("cooldownIndicator");
+    const repairTimer = document.getElementById("repairTimer");
     
     // Game constants
     const ARENA_WIDTH = 1200;
@@ -308,7 +326,10 @@
     let lastTime = 0;
     let fps = 0;
     let frameCount = 0;
-    let hitEffects = [];
+    let canShoot = true;
+    let canRepair = true;
+    let repairCooldown = 5000; // 5 seconds
+    let repairCooldownTimer = null;
 
     // Crosshair positioning
     const crosshair = document.getElementById("crosshair");
@@ -322,36 +343,72 @@
     document.addEventListener("keydown", e => {
       keys[e.code.toLowerCase()] = true;
       if (e.code === "Space") e.preventDefault();
-      if (e.code === "KeyR" && myPlayerId) {
+      if (e.code === "KeyR" && myPlayerId && canRepair) {
         socket.emit("repair");
+        startRepairCooldown();
       }
     });
+    
     document.addEventListener("keyup", e => keys[e.code.toLowerCase()] = false);
-    canvas.addEventListener("click", (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      socket.emit("shoot", { x, y });
+    
+    canvas.addEventListener("click", () => {
+      if (canShoot && myPlayerId && players[myPlayerId]) {
+        socket.emit("shoot");
+        canShoot = false;
+        setTimeout(() => { canShoot = true; }, 300);
+      }
     });
+
+    // Repair cooldown function
+    function startRepairCooldown() {
+      canRepair = false;
+      cooldownIndicator.style.display = 'block';
+      let timeLeft = 5;
+      
+      repairCooldownTimer = setInterval(() => {
+        timeLeft--;
+        repairTimer.textContent = timeLeft;
+        
+        if (timeLeft <= 0) {
+          clearInterval(repairCooldownTimer);
+          canRepair = true;
+          cooldownIndicator.style.display = 'none';
+        }
+      }, 1000);
+    }
 
     // Socket events
     socket.on("connect", () => {
       console.log("Connected:", socket.id);
     });
 
+    socket.on("init", (data) => {
+      myPlayerId = data.myPlayerId;
+      console.log("Game initialized, my ID:", myPlayerId);
+    });
+
     socket.on("state", (data) => {
       players = data.players;
       bullets = data.bullets;
-      myPlayerId = data.myPlayerId;
-     
+      
       // Update UI
       document.getElementById("playersCount").textContent = Object.keys(players).length;
       document.getElementById("bulletsCount").textContent = bullets.length;
       
       // Update health bar
       if (myPlayerId && players[myPlayerId]) {
-        const hp = players[myPlayerId].hp || 100;
+        const player = players[myPlayerId];
+        const hp = player.hp || 100;
         healthBar.style.width = `${hp}%`;
+        
+        // Update health bar color based on HP
+        if (hp > 70) {
+          healthBar.style.background = "linear-gradient(90deg, #00ff00, #00aa00)";
+        } else if (hp > 40) {
+          healthBar.style.background = "linear-gradient(90deg, #ffff00, #aa5500)";
+        } else {
+          healthBar.style.background = "linear-gradient(90deg, #ff0000, #aa0000)";
+        }
       }
      
       updateLeaderboard();
@@ -359,6 +416,7 @@
 
     socket.on("playerJoined", (player) => {
       players[player.id] = player;
+      document.getElementById("playersCount").textContent = Object.keys(players).length;
     });
 
     socket.on("hit", (data) => {
@@ -381,6 +439,24 @@
       }
     });
 
+    socket.on("died", () => {
+      console.log("You died!");
+      // Reset repair cooldown on death
+      if (repairCooldownTimer) {
+        clearInterval(repairCooldownTimer);
+        canRepair = true;
+        cooldownIndicator.style.display = 'none';
+      }
+    });
+
+    socket.on("respawned", () => {
+      console.log("You respawned!");
+    });
+
+    socket.on("repaired", (data) => {
+      console.log("Repaired! HP:", data.hp);
+    });
+
     function updateLeaderboard() {
       const sortedPlayers = Object.values(players)
         .sort((a, b) => b.score - a.score)
@@ -392,8 +468,9 @@
       sortedPlayers.forEach((player, index) => {
         const entry = document.createElement("div");
         entry.className = "player-entry";
+        const status = player.hp > 0 ? '🟢' : '🔴';
         entry.innerHTML = `
-          <span class="player-name">${index + 1}. ${player.name || "Player"}</span>
+          <span class="player-name">${status} ${index + 1}. ${player.name || "Player"}</span>
           <span class="player-score">${player.score || 0}</span>
         `;
         leaderboard.appendChild(entry);
@@ -417,37 +494,33 @@
       if (!myPlayerId || !players[myPlayerId]) return;
       
       let dx = 0, dy = 0;
-      const speed = 3;
       const boost = keys["space"] ? 1.8 : 1;
       
-      if (keys["keyw"]) dy -= speed * boost;
-      if (keys["keys"]) dy += speed * boost;
-      if (keys["keya"]) dx -= speed * boost;
-      if (keys["keyd"]) dx += speed * boost;
-     
-      if (dx || dy) {
-        angle = Math.atan2(dy, dx);
-        
-        // Get current position
-        const currentPlayer = players[myPlayerId];
-        let newX = currentPlayer.x + dx;
-        let newY = currentPlayer.y + dy;
-        
-        // Apply boundary constraints
-        const boundedPos = checkBoundaries(newX, newY);
-        newX = boundedPos.x;
-        newY = boundedPos.y;
-        
+      if (keys["keyw"]) dy -= 1;
+      if (keys["keys"]) dy += 1;
+      if (keys["keya"]) dx -= 1;
+      if (keys["keyd"]) dx += 1;
+      
+      // Normalize diagonal movement
+      if (dx !== 0 && dy !== 0) {
+        dx *= 0.707;
+        dy *= 0.707;
+      }
+      
+      if (dx !== 0 || dy !== 0) {
+        // Send velocity-based movement to server
         socket.emit("move", { 
-          x: newX, 
-          y: newY, 
-          angle: angle, 
-          boost: boost 
+          dx: dx * boost,
+          dy: dy * boost,
+          boost: boost > 1
         });
+        
+        // Update angle for local rendering
+        angle = Math.atan2(dy, dx);
       }
     }
 
-    function drawTank(x, y, angle, hp, score, isMe = false) {
+    function drawTank(x, y, angle, hp, score, name, isMe = false) {
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(angle);
@@ -458,14 +531,14 @@
      
       // Tank body glow
       ctx.shadowColor = isMe ? "#00ff88" : "#ff4444";
-      ctx.shadowBlur = hp > 50 ? 20 : 30; // More glow when low health
+      ctx.shadowBlur = hp > 50 ? 20 : 30;
      
       // Tank body with damage effect
       const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 20);
-      if (hp > 50) {
+      if (hp > 70) {
         gradient.addColorStop(0, isMe ? "#00ff88" : "#444");
         gradient.addColorStop(1, isMe ? "#00aa55" : "#222");
-      } else if (hp > 20) {
+      } else if (hp > 40) {
         gradient.addColorStop(0, isMe ? "#ff8800" : "#664400");
         gradient.addColorStop(1, isMe ? "#aa5500" : "#442200");
       } else {
@@ -504,13 +577,13 @@
       ctx.fillStyle = "#ffffff";
       ctx.font = "bold 10px Arial";
       ctx.textAlign = "center";
-      ctx.fillText(`${hp}%`, x, y - 30);
+      ctx.fillText(`${Math.round(hp)}%`, x, y - 30);
 
       // Name and score
       ctx.fillStyle = isMe ? "#00ff88" : "#fff";
       ctx.font = "bold 14px Arial";
       ctx.textAlign = "center";
-      ctx.fillText(`${score}`, x, y + 40);
+      ctx.fillText(`${name || "Player"}: ${score || 0}`, x, y + 40);
     }
 
     function drawArenaBoundaries() {
@@ -565,7 +638,7 @@
       bullets.forEach(b => {
         // Bullet trail
         ctx.beginPath();
-        ctx.moveTo(b.x - b.vx * 2, b.y - b.vy * 2);
+        ctx.moveTo(b.x - (b.vx || 0) * 2, b.y - (b.vy || 0) * 2);
         ctx.lineTo(b.x, b.y);
         ctx.strokeStyle = "rgba(255, 255, 100, 0.5)";
         ctx.lineWidth = 2;
@@ -592,6 +665,7 @@
             player.angle || 0,
             player.hp || 100,
             player.score || 0,
+            player.name || "Player",
             id === myPlayerId
           );
         }
