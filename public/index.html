@@ -1,403 +1,473 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Tank Battle</title>
+  <title>Advanced Tank Battle Arena</title>
   <style>
-    body {
+    * {
       margin: 0;
-      background: #0b0b0d;
-      color: #e6e6e6;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
+      color: #fff;
+      font-family: 'Arial', sans-serif;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    .game-container {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    .header {
+      background: rgba(0, 0, 0, 0.9);
+      padding: 15px 30px;
+      border-bottom: 2px solid #00ff88;
+      box-shadow: 0 2px 20px rgba(0, 255, 136, 0.3);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      backdrop-filter: blur(10px);
+    }
+
+    .game-title {
+      font-size: 24px;
+      font-weight: bold;
+      background: linear-gradient(45deg, #00ff88, #00ccff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      text-shadow: 0 0 30px rgba(0, 255, 136, 0.5);
+    }
+
+    .game-info {
+      display: flex;
+      gap: 30px;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .info-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-width: 80px;
+    }
+
+    .info-value {
+      font-size: 20px;
+      color: #00ff88;
+      font-weight: bold;
+    }
+
+    .controls {
+      position: absolute;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.8);
+      padding: 20px 30px;
+      border-radius: 20px;
+      border: 2px solid #444;
+      backdrop-filter: blur(15px);
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+      font-size: 14px;
+    }
+
+    .minimap {
+      position: absolute;
+      top: 80px;
+      right: 30px;
+      width: 150px;
+      height: 150px;
+      background: rgba(0, 0, 0, 0.8);
+      border: 2px solid #00ff88;
+      border-radius: 10px;
+      padding: 10px;
+      box-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
+    }
+
+    .minimap-label {
+      font-size: 12px;
+      color: #00ff88;
+      margin-bottom: 5px;
       text-align: center;
-      font-family: Inter, Arial, sans-serif;
     }
-    .ui {
-      padding: 12px;
+
+    .leaderboard {
+      position: absolute;
+      top: 80px;
+      left: 30px;
+      width: 250px;
+      background: rgba(0, 0, 0, 0.9);
+      border: 2px solid #ff4444;
+      border-radius: 15px;
+      padding: 15px;
+      box-shadow: 0 10px 30px rgba(255, 68, 68, 0.2);
+      max-height: 300px;
+      overflow-y: auto;
     }
-    canvas {
-      background: linear-gradient(#161616, #0f0f10);
+
+    .leaderboard-title {
+      font-size: 16px;
+      color: #ff4444;
+      margin-bottom: 10px;
+      text-align: center;
+    }
+
+    .player-entry {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #333;
+      font-size: 14px;
+    }
+
+    .player-name {
+      color: #fff;
+    }
+
+    .player-score {
+      color: #ffaa00;
+      font-weight: bold;
+    }
+
+    #game {
+      flex: 1;
+      background: radial-gradient(circle at center, #1a1a2e 0%, #0f0f23 70%, #000 100%);
       display: block;
       margin: 0 auto;
-      border-radius: 8px;
-      box-shadow: 0 6px 30px rgba(0,0,0,0.6);
-      border: 2px solid rgba(255,255,255,0.04);
+      border: 3px solid #00ff88;
+      border-radius: 10px;
+      box-shadow: 0 0 50px rgba(0, 255, 136, 0.4);
+      max-width: 100%;
+      max-height: 100%;
     }
-    p.small {
-      margin: 4px 0 12px;
-      color: #bfbfbf;
-      font-size: 13px;
+
+    .crosshair {
+      position: absolute;
+      width: 30px;
+      height: 30px;
+      pointer-events: none;
+      transition: all 0.1s ease;
+    }
+
+    .crosshair::before,
+    .crosshair::after {
+      content: '';
+      position: absolute;
+      background: rgba(0, 255, 136, 0.8);
+      width: 2px;
+      height: 15px;
+      left: 14px;
+    }
+
+    .crosshair::before {
+      top: 0;
+    }
+
+    .crosshair::after {
+      bottom: 0;
+    }
+
+    .crosshair span {
+      position: absolute;
+      background: rgba(0, 255, 136, 0.8);
+      height: 2px;
+      width: 15px;
+      left: 0;
+      top: 14px;
+    }
+
+    .crosshair span:last-child {
+      left: 15px;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 0.7; }
+      50% { opacity: 1; }
+    }
+
+    .pulse {
+      animation: pulse 1.5s infinite;
     }
   </style>
 </head>
 <body>
+  <div class="game-container">
+    <div class="header">
+      <div class="game-title">⚡ TANK BATTLE ARENA ⚡</div>
+      <div class="game-info">
+        <div class="info-item">
+          <span class="info-value" id="playersCount">0</span>
+          <span>Players</span>
+        </div>
+        <div class="info-item">
+          <span class="info-value" id="bulletsCount">0</span>
+          <span>Bullets</span>
+        </div>
+        <div class="info-item">
+          <span class="info-value" id="fps">60</span>
+          <span>FPS</span>
+        </div>
+      </div>
+    </div>
 
-<h2>2D Multiplayer Tank Game</h2>
-<div class="ui">
-  <p class="small">Move: W A S D | Aim: Mouse | Shoot: Click</p>
-</div>
-<canvas id="game" width="800" height="500" style="width:800px;height:500px"></canvas>
+    <canvas id="game" width="1200" height="700"></canvas>
 
-<script src="/socket.io/socket.io.js"></script>
-<script>
-  // -- Utilities
-  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const lerp = (a, b, t) => a + (b - a) * t;
-  const lerpAngle = (a, b, t) => {
-    let diff = (b - a + Math.PI) % (2*Math.PI) - Math.PI;
-    return a + diff * t;
-  };
+    <div class="leaderboard" id="leaderboard">
+      <div class="leaderboard-title">🏆 TOP PLAYERS</div>
+    </div>
 
-  // -- Networking / state
-  const socket = io();
-  const canvas = document.getElementById("game");
-  const ctx = canvas.getContext("2d");
+    <div class="minimap" id="minimap">
+      <div class="minimap-label">MINIMAP</div>
+      <canvas id="minimapCanvas" width="130" height="130"></canvas>
+    </div>
 
-  // Hi-DPI support
-  const DPR = Math.max(1, window.devicePixelRatio || 1);
-  const CSS_W = 800, CSS_H = 500;
-  canvas.width = CSS_W * DPR;
-  canvas.height = CSS_H * DPR;
-  canvas.style.width = CSS_W + "px";
-  canvas.style.height = CSS_H + "px";
-  ctx.scale(DPR, DPR);
+    <div class="controls">
+      <strong>🎮 CONTROLS</strong><br>
+      <span style="color: #00ff88;">WASD</span> Move | <span style="color: #ff4444;">CLICK</span> Shoot<br>
+      <span style="color: #ffaa00;">SPACE</span> Boost | <span style="color: #00ccff;">R</span> Repair
+    </div>
 
-  let players = {};   // keyed by id; we store interpolation metadata
-  let bullets = [];   // server-authoritative bullet list (we'll smoothly draw)
-  const localId = { id: null }; // will be set when server tells us (optional)
-  let keys = {};
-  let mouse = { x: CSS_W/2, y: CSS_H/2, angle: 0, down: false };
+    <div class="crosshair pulse" id="crosshair"></div>
+  </div>
 
-  let lastSend = 0;
-  const SEND_RATE = 40; // ms between move emits (client-side throttling)
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const minimapCanvas = document.getElementById("minimapCanvas");
+    const minimapCtx = minimapCanvas.getContext("2d");
+   
+    // Responsive canvas
+    function resizeCanvas() {
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+      minimapCanvas.width = 130;
+      minimapCanvas.height = 130;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
 
-  // local predicted state for smoother control of the local player
-  const local = {
-    x: CSS_W/2,
-    y: CSS_H/2,
-    angle: 0,
-    speed: 140, // pixels/sec
-    velX: 0,
-    velY: 0,
-    lastUpdate: performance.now()
-  };
+    let players = {};
+    let bullets = [];
+    let myPlayerId = null;
+    let angle = 0;
+    const keys = {};
+    let lastTime = 0;
+    let fps = 0;
+    let frameCount = 0;
 
-  // input handlers
-  document.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
-  document.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
-  canvas.addEventListener("mousemove", (ev) => {
-    const rect = canvas.getBoundingClientRect();
-    // map client coords to canvas CSS coordinates
-    mouse.x = (ev.clientX - rect.left) * (CSS_W / rect.width);
-    mouse.y = (ev.clientY - rect.top) * (CSS_H / rect.height);
-    mouse.angle = Math.atan2(mouse.y - (local.y || CSS_H/2), mouse.x - (local.x || CSS_W/2));
-  });
-  canvas.addEventListener("mousedown", (ev) => {
-    mouse.down = true;
-    socket.emit("shoot", { x: mouse.x, y: mouse.y, angle: mouse.angle });
-  });
-  canvas.addEventListener("mouseup", () => mouse.down = false);
+    // Crosshair positioning
+    const crosshair = document.getElementById("crosshair");
+    canvas.addEventListener("mousemove", (e) => {
+      const rect = canvas.getBoundingClientRect();
+      crosshair.style.left = (e.clientX - rect.left - 15) + "px";
+      crosshair.style.top = (e.clientY - rect.top - 15) + "px";
+    });
 
-  // socket: server sends authoritative state periodically
-  socket.on("connect", () => {
-    console.log("connected", socket.id);
-    localId.id = socket.id;
-  });
+    // Input handlers
+    document.addEventListener("keydown", e => {
+      keys[e.code.toLowerCase()] = true;
+      if (e.code === "Space") e.preventDefault();
+    });
+    document.addEventListener("keyup", e => keys[e.code.toLowerCase()] = false);
+    canvas.addEventListener("click", (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      socket.emit("shoot", { x, y });
+    });
 
-  socket.on("state", (data) => {
-    // data.players: {id: {x,y,angle,hp,name,...}}  data.bullets: [{x,y,vx,vy,id,...}]
-    const now = performance.now();
-    // update local prediction base if server gave our position
-    if (data.players && data.players[socket.id]) {
-      const sp = data.players[socket.id];
-      // correct local predicted state smoothly (reconciliation)
-      local.x = sp.x;
-      local.y = sp.y;
-      local.angle = sp.angle;
+    // Socket events
+    socket.on("connect", () => {
+      console.log("Connected:", socket.id);
+    });
+
+    socket.on("state", (data) => {
+      players = data.players;
+      bullets = data.bullets;
+      myPlayerId = data.myPlayerId;
+     
+      // Update UI
+      document.getElementById("playersCount").textContent = Object.keys(players).length;
+      document.getElementById("bulletsCount").textContent = bullets.length;
+     
+      updateLeaderboard();
+    });
+
+    socket.on("playerJoined", (player) => {
+      players[player.id] = player;
+    });
+
+    function updateLeaderboard() {
+      const sortedPlayers = Object.values(players)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 8);
+     
+      const leaderboard = document.getElementById("leaderboard");
+      leaderboard.innerHTML = '<div class="leaderboard-title">🏆 TOP PLAYERS</div>';
+     
+      sortedPlayers.forEach((player, index) => {
+        const entry = document.createElement("div");
+        entry.className = "player-entry";
+        entry.innerHTML = `
+          <span class="player-name">${index + 1}. ${player.name || "Player"}</span>
+          <span class="player-score">${player.score || 0}</span>
+        `;
+        leaderboard.appendChild(entry);
+      });
     }
 
-    // For every player, store interpolation targets
-    Object.keys(data.players || {}).forEach(id => {
-      const serverP = data.players[id];
-      if (!players[id]) {
-        // create interpolation object if new
-        players[id] = {
-          displayX: serverP.x,
-          displayY: serverP.y,
-          displayAngle: serverP.angle || 0,
-          targetX: serverP.x,
-          targetY: serverP.y,
-          targetAngle: serverP.angle || 0,
-          lastUpdate: now
-        };
+    function update() {
+      let dx = 0, dy = 0, boost = 1;
+     
+      if (keys["keyw"]) dy -= 3 * boost;
+      if (keys["keys"]) dy += 1.5;
+      if (keys["keya"]) dx -= 3 * boost;
+      if (keys["keyd"]) dx += 3 * boost;
+     
+      if (keys["space"]) boost = 1.8;
+
+      if (dx || dy) {
+        angle = Math.atan2(dy, dx);
+        socket.emit("move", { dx, dy, angle, boost });
       }
-      const p = players[id];
-      p.prevX = p.displayX;
-      p.prevY = p.displayY;
-      p.prevAngle = p.displayAngle;
-      p.targetX = serverP.x;
-      p.targetY = serverP.y;
-      p.targetAngle = serverP.angle || 0;
-      p.lastUpdate = now;
-      p.hp = serverP.hp ?? 100;
-      p.name = serverP.name ?? (id === socket.id ? "You" : ("Player-" + id.slice(0,4)));
-    });
-
-    // Remove players not present anymore
-    Object.keys(players).forEach(id => {
-      if (!data.players || !data.players[id]) {
-        delete players[id];
-      }
-    });
-
-    // bullets - we'll draw them smoothly. store server list
-    bullets = (data.bullets || []).map(b => Object.assign({}, b, { drawX: b.x, drawY: b.y }));
-  });
-
-  // -- Game update/draw loop with delta time and interpolation
-  let lastFrame = performance.now();
-
-  function processInput(dt) {
-    // simple acceleration + friction for nicer movement
-    const acc = 600; // px/s^2
-    const maxSpeed = 180; // px/s
-    const friction = 6; // per second
-
-    const up = keys["w"] || keys["arrowup"];
-    const down = keys["s"] || keys["arrowdown"];
-    const left = keys["a"] || keys["arrowleft"];
-    const right = keys["d"] || keys["arrowright"];
-
-    let ax = 0, ay = 0;
-    if (up) ay -= 1;
-    if (down) ay += 1;
-    if (left) ax -= 1;
-    if (right) ax += 1;
-
-    if (ax !== 0 || ay !== 0) {
-      const len = Math.hypot(ax, ay) || 1;
-      ax /= len; ay /= len;
-      local.velX += ax * acc * dt;
-      local.velY += ay * acc * dt;
-    } else {
-      // apply friction
-      local.velX -= local.velX * clamp(friction * dt, 0, 1);
-      local.velY -= local.velY * clamp(friction * dt, 0, 1);
     }
 
-    // clamp speed
-    const spd = Math.hypot(local.velX, local.velY);
-    if (spd > maxSpeed) {
-      const s = maxSpeed / spd;
-      local.velX *= s;
-      local.velY *= s;
-    }
-
-    // integrate
-    local.x += local.velX * dt;
-    local.y += local.velY * dt;
-
-    // keep in bounds
-    local.x = clamp(local.x, 10, CSS_W - 10);
-    local.y = clamp(local.y, 10, CSS_H - 10);
-
-    // aim towards mouse (local)
-    local.angle = Math.atan2(mouse.y - local.y, mouse.x - local.x);
-
-    // Send movement updates at limited rate (throttle)
-    const now = performance.now();
-    if (now - lastSend > SEND_RATE) {
-      lastSend = now;
-      // keep same "move" event shape as before but include dt and position for reconciliation
-      socket.emit("move", { dx: local.velX, dy: local.velY, angle: local.angle, x: local.x, y: local.y, dt });
-    }
-  }
-
-  function interpolatePlayers() {
-    // interpolate display positions between prev and target, using time since lastUpdate
-    const now = performance.now();
-    Object.entries(players).forEach(([id, p]) => {
-      const elapsed = (now - p.lastUpdate) / 100; // normalized smoothing window (adjustable)
-      const t = clamp(elapsed, 0, 1);
-      p.displayX = lerp(p.prevX ?? p.targetX, p.targetX, t);
-      p.displayY = lerp(p.prevY ?? p.targetY, p.targetY, t);
-      p.displayAngle = lerpAngle(p.prevAngle ?? p.targetAngle, p.targetAngle, t);
-    });
-  }
-
-  function updateBullets(dt) {
-    // smooth bullet positions (simple approach: move by velocity; server will correct)
-    bullets.forEach(b => {
-      if (typeof b.vx !== "undefined" && typeof b.vy !== "undefined") {
-        b.drawX += b.vx * dt;
-        b.drawY += b.vy * dt;
-      } else {
-        // fallback: lerp towards server position
-        b.drawX = lerp(b.drawX, b.x, 0.2);
-        b.drawY = lerp(b.drawY, b.y, 0.2);
-      }
-    });
-  }
-
-  function drawTank(x, y, angle, hp = 100, name = "Player", isLocal = false) {
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(angle);
-
-    // shadow
-    ctx.fillStyle = "rgba(0,0,0,0.25)";
-    ctx.beginPath();
-    ctx.ellipse(0, 10, 22, 8, 0, 0, Math.PI*2);
-    ctx.fill();
-
-    // body
-    ctx.fillStyle = isLocal ? "#7efc6f" : "#63a7ff";
-    ctx.strokeStyle = "rgba(0,0,0,0.35)";
-    ctx.lineWidth = 2;
-    roundRect(ctx, -18, -12, 36, 24, 4, true, false);
-
-    // turret
-    ctx.fillStyle = "#111";
-    ctx.beginPath();
-    ctx.arc(0, 0, 9, 0, Math.PI*2);
-    ctx.fill();
-    ctx.fillStyle = "#333";
-    ctx.beginPath();
-    ctx.arc(0, 0, 6, 0, Math.PI*2);
-    ctx.fill();
-
-    // barrel
-    ctx.fillStyle = "#222";
-    ctx.fillRect(6, -3, 18, 6);
-    ctx.restore();
-
-    // health bar above
-    const hbW = 40, hbH = 6;
-    const barX = x - hbW/2, barY = y - 28;
-    ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,0.5)";
-    roundRect(ctx, barX-1, barY-1, hbW+2, hbH+2, 3, true, false);
-    // background
-    ctx.fillStyle = "#4b4b4b";
-    roundRect(ctx, barX, barY, hbW, hbH, 3, true, false);
-    // health
-    const pct = clamp(hp/100, 0, 1);
-    const grad = ctx.createLinearGradient(barX,0,barX+hbW,0);
-    grad.addColorStop(0, "#ff5f5f");
-    grad.addColorStop(1, "#ffdf5f");
-    ctx.fillStyle = grad;
-    roundRect(ctx, barX, barY, hbW * pct, hbH, 3, true, false);
-
-    // name
-    ctx.fillStyle = "#e9e9e9";
-    ctx.font = "12px Inter, Arial";
-    ctx.textAlign = "center";
-    ctx.fillText(name, x, y - 36);
-    ctx.restore();
-  }
-
-  function roundRect(ctx, x, y, w, h, r, fill, stroke) {
-    if (typeof r === 'undefined') r = 5;
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
-    ctx.closePath();
-    if (fill) ctx.fill();
-    if (stroke) ctx.stroke();
-  }
-
-  function draw() {
-    // clear
-    ctx.clearRect(0, 0, CSS_W, CSS_H);
-
-    // background grid for depth
-    ctx.save();
-    ctx.globalAlpha = 0.06;
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 1;
-    for (let gx = 0; gx < CSS_W; gx += 40) {
-      ctx.beginPath();
-      ctx.moveTo(gx + 0.5, 0);
-      ctx.lineTo(gx + 0.5, CSS_H);
-      ctx.stroke();
-    }
-    for (let gy = 0; gy < CSS_H; gy += 40) {
-      ctx.beginPath();
-      ctx.moveTo(0, gy + 0.5);
-      ctx.lineTo(CSS_W, gy + 0.5);
-      ctx.stroke();
-    }
-    ctx.restore();
-
-    // players (draw others first)
-    Object.entries(players).forEach(([id, p]) => {
-      const isLocal = (id === socket.id);
-      const x = isLocal ? local.x : p.displayX;
-      const y = isLocal ? local.y : p.displayY;
-      const angle = isLocal ? local.angle : p.displayAngle;
-      drawTank(x, y, angle, p.hp ?? 100, p.name ?? id, isLocal);
-    });
-
-    // bullets
-    bullets.forEach(b => {
+    function drawTank(x, y, angle, hp, score, isMe = false) {
       ctx.save();
-      ctx.translate(b.drawX, b.drawY);
-      ctx.fillStyle = "rgba(255, 215, 60, 0.98)";
-      ctx.beginPath();
-      ctx.arc(0, 0, 3.5, 0, Math.PI*2);
-      ctx.fill();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
 
-      // small glow
-      ctx.globalCompositeOperation = "lighter";
-      const g = ctx.createRadialGradient(0,0,0,0,0,12);
-      g.addColorStop(0, "rgba(255,235,160,0.9)");
-      g.addColorStop(1, "rgba(255,235,160,0)");
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(0,0,8,0,Math.PI*2);
-      ctx.fill();
+      // Tank tracks
+      ctx.fillStyle = "#333";
+      ctx.fillRect(-18, -12, 36, 24);
+     
+      // Tank body glow
+      ctx.shadowColor = isMe ? "#00ff88" : "#ff4444";
+      ctx.shadowBlur = 20;
+     
+      // Tank body
+      const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 20);
+      gradient.addColorStop(0, isMe ? "#00ff88" : "#444");
+      gradient.addColorStop(1, isMe ? "#00aa55" : "#222");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(-15, -10, 30, 20);
+
+      // Tank turret
+      ctx.fillStyle = isMe ? "#00ccff" : "#555";
+      ctx.fillRect(-8, -6, 16, 12);
+     
+      // Cannon
+      ctx.fillStyle = "#666";
+      ctx.fillRect(8, -3, 20, 6);
+     
       ctx.restore();
-    });
+      ctx.shadowBlur = 0;
 
-    // debug: crosshair at mouse
-    ctx.save();
-    ctx.strokeStyle = "rgba(255,255,255,0.12)";
-    ctx.beginPath();
-    ctx.moveTo(mouse.x - 8, mouse.y);
-    ctx.lineTo(mouse.x + 8, mouse.y);
-    ctx.moveTo(mouse.x, mouse.y - 8);
-    ctx.lineTo(mouse.x, mouse.y + 8);
-    ctx.stroke();
-    ctx.restore();
-  }
+      // Health bar
+      ctx.fillStyle = "rgba(0,0,0,0.7)";
+      ctx.fillRect(x - 20, y - 35, 40, 6);
+      ctx.fillStyle = `rgb(${255 * (1 - hp/100)}, ${255 * (hp/100)}, 0)`;
+      ctx.fillRect(x - 20, y - 35, hp * 0.4, 6);
 
-  function loop(now) {
-    const tNow = now || performance.now();
-    const dt = Math.min(0.05, (tNow - lastFrame) / 1000); // clamp dt to avoid large jumps
-    lastFrame = tNow;
+      // Name and score
+      ctx.fillStyle = isMe ? "#00ff88" : "#fff";
+      ctx.font = "bold 14px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(`${score}`, x, y + 35);
+    }
 
-    // update local physics & send move
-    processInput(dt);
+    function draw() {
+      // Clear with gradient background
+      const gradient = ctx.createRadialGradient(canvas.width/2, canvas.height/2, 0, canvas.width/2, canvas.height/2, Math.max(canvas.width, canvas.height));
+      gradient.addColorStop(0, "#2a2a4a");
+      gradient.addColorStop(1, "#0a0a1a");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // interpolation and bullet smoothing
-    interpolatePlayers();
-    updateBullets(dt);
+      // Draw ground pattern
+      ctx.strokeStyle = "rgba(255,255,255,0.03)";
+      ctx.lineWidth = 1;
+      for (let x = 0; x < canvas.width; x += 50) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += 50) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      }
 
-    // draw everything
-    draw();
+      // Draw bullets
+      bullets.forEach(b => {
+        ctx.save();
+        ctx.translate(b.x, b.y);
+        ctx.fillStyle = "#ffff44";
+        ctx.shadowColor = "#ffff00";
+        ctx.shadowBlur = 15;
+        ctx.fillRect(-2, -2, 4, 4);
+        ctx.restore();
+      });
+
+      // Draw players
+      Object.entries(players).forEach(([id, player]) => {
+        drawTank(
+          player.x * (canvas.width / 800),
+          player.y * (canvas.height / 500),
+          player.angle,
+          player.hp || 100,
+          player.score || 0,
+          id === myPlayerId
+        );
+      });
+
+      // FPS counter
+      frameCount++;
+      if (performance.now() - lastTime > 1000) {
+        fps = Math.round(frameCount * 1000 / (performance.now() - lastTime));
+        frameCount = 0;
+        lastTime = performance.now();
+        document.getElementById("fps").textContent = fps;
+      }
+    }
+
+    function drawMinimap() {
+      minimapCtx.clearRect(0, 0, 130, 130);
+      minimapCtx.fillStyle = "rgba(20,20,40,0.8)";
+      minimapCtx.fillRect(0, 0, 130, 130);
+
+      Object.values(players).forEach(p => {
+        minimapCtx.fillStyle = p.id === myPlayerId ? "#00ff88" : "#ff4444";
+        minimapCtx.beginPath();
+        minimapCtx.arc(p.x / 6, p.y / 6, 3, 0, Math.PI * 2);
+        minimapCtx.fill();
+      });
+
+      bullets.forEach(b => {
+        minimapCtx.fillStyle = "#ffff44";
+        minimapCtx.fillRect(b.x / 6 - 0.5, b.y / 6 - 0.5, 1, 1);
+      });
+    }
+
+    function loop(currentTime) {
+      update();
+      draw();
+      drawMinimap();
+      requestAnimationFrame(loop);
+    }
 
     requestAnimationFrame(loop);
-  }
-
-  // start
-  requestAnimationFrame(loop);
-
-  // keep canvas responsive to DPR changes (optional)
-  window.addEventListener("resize", () => {
-    // (left simple — for production consider re-scaling on DPR or window size changes)
-  });
-</script>
-
+  </script>
 </body>
 </html>
