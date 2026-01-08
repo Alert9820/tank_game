@@ -280,7 +280,7 @@ io.on("connection", (socket) => {
 
 // Game loop
 const FPS = 60;
-const frameTime = 1000 / FPS;
+const frameTime = 10000 / FPS;
 let lastUpdate = Date.now();
 
 function gameLoop() {
