@@ -22,25 +22,27 @@ const GAME_CONFIG = {
   TANK_WIDTH: 30,
   TANK_HEIGHT: 20,
   TANK_RADIUS: 15,
-  BULLET_RADIUS: 5, // Reduced for better hit detection
-  BULLET_SPEED: 800, // Increased for smoother movement (pixels per second)
+  BULLET_RADIUS: 5,
+  BULLET_SPEED: 800,
   BULLET_DAMAGE: 25,
   MAX_HEALTH: 100,
-  TANK_SPEED: 250, // Changed to pixels per second
+  TANK_SPEED: 250,
   TANK_BOOST_MULTIPLIER: 1.8,
   FRICTION: 0.92,
-  ROTATION_SPEED: 8, // Increased for faster response
+  TANK_TURN_SPEED: 6, // Rotation speed for tank body
+  TURRET_TURN_SPEED: 10, // Faster rotation for turret
   RESPAWN_TIME: 3000,
   BULLET_LIFETIME: 2000,
   REPAIR_AMOUNT: 10,
   REPAIR_COOLDOWN: 5000,
-  SMOOTHING_FACTOR: 0.2, // For rotation smoothing
-  MAX_BULLETS: 50, // Prevent memory leaks
-  UPDATE_RATE: 60 // FPS for client updates
+  SMOOTHING_FACTOR: 0.2,
+  MAX_BULLETS: 50,
+  UPDATE_RATE: 60,
+  TANK_TURRET_OFFSET: 25 // Distance from tank center to turret tip
 };
 
 const players = {};
-const bullets = new Map(); // Use Map for better bullet management
+const bullets = new Map();
 const lastRepairTime = {};
 let bulletIdCounter = 0;
 
@@ -52,8 +54,10 @@ class Player {
     this.y = y;
     this.vx = 0;
     this.vy = 0;
-    this.angle = 0;
-    this.targetAngle = 0;
+    this.angle = 0; // Tank body angle (based on movement)
+    this.targetAngle = 0; // Target angle for tank body
+    this.turretAngle = 0; // Turret angle (independent, for aiming)
+    this.targetTurretAngle = 0; // Target turret angle (from mouse)
     this.hp = GAME_CONFIG.MAX_HEALTH;
     this.score = 0;
     this.name = `Player_${id.slice(0, 4)}`;
@@ -68,7 +72,9 @@ class Player {
       dx: 0,
       dy: 0,
       boost: false,
-      angle: 0
+      mouseX: 0,
+      mouseY: 0,
+      isMouseDown: false
     };
   }
 
@@ -94,28 +100,31 @@ class Player {
     this.x += this.vx * deltaTime;
     this.y += this.vy * deltaTime;
 
-    // Smooth rotation using lerp
+    // Smooth tank body rotation (based on movement direction)
     let angleDiff = this.targetAngle - this.angle;
-    // Normalize angle difference
     angleDiff = ((angleDiff + Math.PI) % (2 * Math.PI)) - Math.PI;
-    
     this.angle += angleDiff * GAME_CONFIG.SMOOTHING_FACTOR;
+
+    // Smooth turret rotation (based on mouse aim)
+    let turretAngleDiff = this.targetTurretAngle - this.turretAngle;
+    turretAngleDiff = ((turretAngleDiff + Math.PI) % (2 * Math.PI)) - Math.PI;
+    this.turretAngle += turretAngleDiff * GAME_CONFIG.TURRET_TURN_SPEED * deltaTime;
 
     // Boundary collision with bounce
     if (this.x < GAME_CONFIG.TANK_RADIUS) {
       this.x = GAME_CONFIG.TANK_RADIUS;
-      this.vx = Math.abs(this.vx) * 0.5; // Bounce
+      this.vx = Math.abs(this.vx) * 0.5;
     } else if (this.x > GAME_CONFIG.ARENA_WIDTH - GAME_CONFIG.TANK_RADIUS) {
       this.x = GAME_CONFIG.ARENA_WIDTH - GAME_CONFIG.TANK_RADIUS;
-      this.vx = -Math.abs(this.vx) * 0.5; // Bounce
+      this.vx = -Math.abs(this.vx) * 0.5;
     }
     
     if (this.y < GAME_CONFIG.TANK_RADIUS) {
       this.y = GAME_CONFIG.TANK_RADIUS;
-      this.vy = Math.abs(this.vy) * 0.5; // Bounce
+      this.vy = Math.abs(this.vy) * 0.5;
     } else if (this.y > GAME_CONFIG.ARENA_HEIGHT - GAME_CONFIG.TANK_RADIUS) {
       this.y = GAME_CONFIG.ARENA_HEIGHT - GAME_CONFIG.TANK_RADIUS;
-      this.vy = -Math.abs(this.vy) * 0.5; // Bounce
+      this.vy = -Math.abs(this.vy) * 0.5;
     }
 
     this.lastUpdate = now;
@@ -126,7 +135,7 @@ class Player {
 
     const speed = GAME_CONFIG.TANK_SPEED * (this.inputState.boost ? GAME_CONFIG.TANK_BOOST_MULTIPLIER : 1);
     
-    // Set velocity based on input (normalized for diagonal movement)
+    // Set velocity based on input (WASD or arrow keys)
     if (this.inputState.dx !== 0 || this.inputState.dy !== 0) {
       // Normalize diagonal movement
       const magnitude = Math.sqrt(this.inputState.dx * this.inputState.dx + this.inputState.dy * this.inputState.dy);
@@ -136,13 +145,16 @@ class Player {
       this.vx = normalizedDx * speed;
       this.vy = normalizedDy * speed;
       
-      // Update target angle based on movement direction
+      // Update target tank angle based on movement direction
       this.targetAngle = Math.atan2(this.vy, this.vx);
     }
     
-    // Also allow rotation without movement
-    if (this.inputState.angle !== 0) {
-      this.targetAngle += this.inputState.angle * GAME_CONFIG.ROTATION_SPEED * deltaTime;
+    // Update turret angle based on mouse position
+    if (this.inputState.mouseX !== 0 || this.inputState.mouseY !== 0) {
+      // Calculate angle from tank center to mouse position
+      const dx = this.inputState.mouseX - this.x;
+      const dy = this.inputState.mouseY - this.y;
+      this.targetTurretAngle = Math.atan2(dy, dx);
     }
   }
 
@@ -158,10 +170,9 @@ class Player {
     
     this.lastShot = now;
     
-    // Calculate bullet spawn position (from cannon tip)
-    const cannonLength = 25;
-    const bulletX = this.x + Math.cos(this.angle) * cannonLength;
-    const bulletY = this.y + Math.sin(this.angle) * cannonLength;
+    // Calculate bullet spawn position (from turret tip)
+    const bulletX = this.x + Math.cos(this.turretAngle) * GAME_CONFIG.TANK_TURRET_OFFSET;
+    const bulletY = this.y + Math.sin(this.turretAngle) * GAME_CONFIG.TANK_TURRET_OFFSET;
     
     const bulletId = `bullet_${bulletIdCounter++}`;
     
@@ -169,11 +180,11 @@ class Player {
       id: bulletId,
       x: bulletX,
       y: bulletY,
-      vx: Math.cos(this.angle) * GAME_CONFIG.BULLET_SPEED,
-      vy: Math.sin(this.angle) * GAME_CONFIG.BULLET_SPEED,
+      vx: Math.cos(this.turretAngle) * GAME_CONFIG.BULLET_SPEED,
+      vy: Math.sin(this.turretAngle) * GAME_CONFIG.BULLET_SPEED,
       owner: this.id,
       createdAt: Date.now(),
-      angle: this.angle
+      angle: this.turretAngle // Use turret angle for bullet direction
     };
   }
 
@@ -213,7 +224,9 @@ class Player {
     this.vy = 0;
     this.angle = 0;
     this.targetAngle = 0;
-    this.inputState = { dx: 0, dy: 0, boost: false, angle: 0 };
+    this.turretAngle = 0;
+    this.targetTurretAngle = 0;
+    this.inputState = { dx: 0, dy: 0, boost: false, mouseX: 0, mouseY: 0, isMouseDown: false };
     
     io.to(this.id).emit("respawned");
   }
@@ -236,7 +249,8 @@ class Player {
       id: this.id,
       x: this.x,
       y: this.y,
-      angle: this.angle,
+      angle: this.angle, // Tank body angle
+      turretAngle: this.turretAngle, // Turret angle
       hp: this.hp,
       score: this.score,
       name: this.name,
@@ -310,7 +324,7 @@ io.on("connection", (socket) => {
     [socket.id]: players[socket.id].toJSON()
   });
 
-  // Movement input - use object for smoother updates
+  // Movement input (WASD or arrow keys)
   socket.on("move", (data) => {
     const player = players[socket.id];
     if (player) {
@@ -318,10 +332,29 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Shooting
-  socket.on("shoot", () => {
+  // Mouse movement for aiming
+  socket.on("aim", (data) => {
     const player = players[socket.id];
     if (player) {
+      player.setInputState({
+        mouseX: data.x,
+        mouseY: data.y
+      });
+    }
+  });
+
+  // Shooting (triggered by mouse click)
+  socket.on("shoot", (data) => {
+    const player = players[socket.id];
+    if (player) {
+      // Update mouse position from shot data for accurate aiming
+      if (data && data.mouseX && data.mouseY) {
+        player.setInputState({
+          mouseX: data.mouseX,
+          mouseY: data.mouseY
+        });
+      }
+      
       const bulletData = player.shoot();
       if (bulletData) {
         const bullet = new Bullet(bulletData);
@@ -334,6 +367,27 @@ io.on("connection", (socket) => {
           playerId: socket.id
         });
       }
+    }
+  });
+
+  // Mouse button state (for auto-fire if needed)
+  socket.on("mouseDown", (data) => {
+    const player = players[socket.id];
+    if (player) {
+      player.setInputState({
+        isMouseDown: true,
+        mouseX: data.x,
+        mouseY: data.y
+      });
+    }
+  });
+
+  socket.on("mouseUp", () => {
+    const player = players[socket.id];
+    if (player) {
+      player.setInputState({
+        isMouseDown: false
+      });
     }
   });
 
@@ -358,8 +412,8 @@ io.on("connection", (socket) => {
 });
 
 // Game loop
-const TICK_RATE = 120; // High tick rate for smooth physics
-const UPDATE_RATE = GAME_CONFIG.UPDATE_RATE; // Lower rate for network updates
+const TICK_RATE = 120;
+const UPDATE_RATE = GAME_CONFIG.UPDATE_RATE;
 const tickInterval = 1000 / TICK_RATE;
 const updateInterval = 1000 / UPDATE_RATE;
 
@@ -368,7 +422,7 @@ let lastUpdateTime = Date.now();
 
 function gameTick() {
   const now = Date.now();
-  const deltaTime = (now - lastTick) / 1000; // Convert to seconds
+  const deltaTime = (now - lastTick) / 1000;
   lastTick = now;
 
   // Limit deltaTime to prevent large jumps
@@ -418,7 +472,7 @@ function gameTick() {
               killerId: bullet.owner
             });
           }
-          break; // This bullet can only hit one player per frame
+          break;
         }
       }
     }
@@ -429,7 +483,7 @@ function gameTick() {
     bullets.delete(bulletId);
   });
 
-  // Check tank-to-tank collisions (optimized)
+  // Check tank-to-tank collisions
   const playerArray = Object.values(players).filter(p => p.isAlive);
   const collisionRadius = GAME_CONFIG.TANK_RADIUS * 2;
   
@@ -448,20 +502,15 @@ function gameTick() {
         const minDistance = GAME_CONFIG.TANK_RADIUS * 2;
         
         if (distance < minDistance && distance > 0) {
-          // Normalize collision vector
           const nx = dx / distance;
           const ny = dy / distance;
-          
-          // Calculate overlap
           const overlap = (minDistance - distance) / 2;
           
-          // Separate tanks
           p1.x += nx * overlap;
           p1.y += ny * overlap;
           p2.x -= nx * overlap;
           p2.y -= ny * overlap;
           
-          // Elastic collision response (simplified)
           const damping = 0.8;
           p1.vx += nx * overlap * damping;
           p1.vy += ny * overlap * damping;
@@ -472,7 +521,7 @@ function gameTick() {
     }
   }
 
-  // Limit number of bullets to prevent memory leaks
+  // Limit number of bullets
   if (bullets.size > GAME_CONFIG.MAX_BULLETS) {
     const oldestBullets = Array.from(bullets.entries())
       .sort((a, b) => a[1].createdAt - b[1].createdAt)
@@ -482,11 +531,9 @@ function gameTick() {
   }
 }
 
-// Separate update loop for network optimization
 function sendUpdates() {
   const now = Date.now();
   
-  // Prepare game state
   const gameState = {
     players: Object.fromEntries(
       Object.entries(players).map(([id, player]) => [id, player.toJSON()])
@@ -495,16 +542,15 @@ function sendUpdates() {
     timestamp: now
   };
 
-  // Send to all players
   io.emit("state", gameState);
   
   lastUpdateTime = now;
 }
 
-// Start game tick loop (high frequency for physics)
+// Start game tick loop
 setInterval(gameTick, tickInterval);
 
-// Start update loop (lower frequency for network)
+// Start update loop
 setInterval(sendUpdates, updateInterval);
 
 // Start server
@@ -513,4 +559,5 @@ server.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
   console.log(`Arena size: ${GAME_CONFIG.ARENA_WIDTH}x${GAME_CONFIG.ARENA_HEIGHT}`);
   console.log(`Tick rate: ${TICK_RATE}Hz, Update rate: ${UPDATE_RATE}Hz`);
+  console.log(`Controls: WASD/Arrow Keys to move, Mouse to aim, Click to shoot`);
 });
