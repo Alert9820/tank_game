@@ -1,4 +1,4 @@
-// Add near the top with other variables
+// Add near the top with other variables....
 let obstacles = [];
 
 // Add to socket.on("init") handler
